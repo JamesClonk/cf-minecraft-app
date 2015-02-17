@@ -18,3 +18,8 @@ src/logs
 # mc
 minecraft*jar
 /world
+
+# aws
+.env
+s3storage.properties
+
