@@ -7,22 +7,14 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.security.NoSuchAlgorithmException;
+import java.io.PrintWriter;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import net.minecraft.server.MinecraftServer;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.filefilter.TrueFileFilter;
-import org.jets3t.service.Constants;
-import org.jets3t.service.Jets3tProperties;
-import org.jets3t.service.S3Service;
-import org.jets3t.service.S3ServiceException;
-import org.jets3t.service.ServiceException;
-import org.jets3t.service.impl.rest.httpclient.RestS3Service;
-import org.jets3t.service.model.S3Bucket;
-import org.jets3t.service.model.S3Object;
-import org.jets3t.service.security.AWSCredentials;
 
 public class MinecraftApp {
 
@@ -31,11 +23,8 @@ public class MinecraftApp {
     private String rconPassword = "c1oudc0w";
     private String levelName = "world";
 
-    private String s3Endpoint = "";
-    private String s3AccessKey = "";
-    private String s3SecretKey = "";
-    private String s3BucketName = "";
-    private S3Service s3Service = null;
+    private StorageProvider storage = null;
+    private Map<String, String> storageConfig = new HashMap<>(8);
 
     private final String[] filesToUpload = {
         "banned-ips.json",
@@ -52,114 +41,131 @@ public class MinecraftApp {
     }
 
     public void run() throws Exception {
-//        // get env vars and update server.properties with them..
-//        HashMap<String, String> data = new HashMap<>(8);
-//        data.put("server-port", getPort());
-//        data.put("enable-rcon", "true");
-//        data.put("rcon.port", "" + rconPort);
-//        data.put("rcon.password", rconPassword);
-//        data.put("level-name", levelName);
-//        updateServerProperties(data);
-//
-//        // start minecraft server
-//        Thread serverThread = startServer();
-//
+        writeEula();
+        writeServerProperties();
+
+        // get env vars and update server.properties with them..
+        HashMap<String, String> data = new HashMap<>(8);
+        data.put("server-port", getPort());
+        data.put("enable-rcon", "true");
+        data.put("rcon.port", "" + rconPort);
+        data.put("rcon.password", rconPassword);
+        data.put("level-name", levelName);
+        updateServerProperties(data);
+
+        // start minecraft server
+        Thread serverThread = startServer();
+
 //        //Thread.sleep(10 * 1000);
 //        Thread.sleep(5000);
 //        RCon rcon = new RCon(rconHost, rconPort, rconPassword.toCharArray());
 //        rcon.say("Hello World!");
 //        //Thread.sleep(5000);
 //        rcon.stop();
+        serverThread.join();
 
-        s3Endpoint = readFromS3Properties("S3_ENDPOINT");
-        s3AccessKey = readFromS3Properties("S3_ACCESS_KEY");
-        s3SecretKey = readFromS3Properties("S3_SECRET_KEY");
-        s3BucketName = readFromS3Properties("S3_BUCKET", "cf-minecraft-app");
-
-        final Jets3tProperties props = Jets3tProperties.getInstance(Constants.JETS3T_PROPERTIES_FILENAME);
-        if (!s3Endpoint.isEmpty()) {
-            props.setProperty("s3service.s3-endpoint", s3Endpoint);
-        }
-        props.setProperty("s3service.https-only", "true");
-        //props.setProperty("s3service.disable-dns-buckets", "false");
-        //props.setProperty("s3service.s3-endpoint-https-port", "443");
-
-        AWSCredentials awsCredentials = new AWSCredentials(s3AccessKey, s3SecretKey);
-        s3Service = new RestS3Service(awsCredentials);
-
-        S3Bucket bucket;
-        if (bucketExists()) {
-            bucket = s3Service.getBucket(s3BucketName);
-        } else {
-            bucket = s3Service.createBucket(s3BucketName);
-            System.out.println("Created S3 bucket: " + bucket.getName());
-        }
-
-        uploadAllFiles(bucket);
+//        boolean isS3 = true;
+//
+//        if (isS3) {
+//            storage = new S3Storage();
+//            storageConfig.putAll(getProperties("s3storage.properties"));
+//        }
+//
+//        storage.connect(storageConfig);
+//        uploadAllFiles();
     }
 
-    private void uploadAllFiles(S3Bucket bucket) throws NoSuchAlgorithmException, IOException, S3ServiceException {
+    private void uploadAllFiles() throws Exception {
         for (String file : filesToUpload) {
-            uploadFile(bucket, file);
+            storage.uploadFile(file);
         }
 
         File worldDir = new File(levelName);
         Collection<File> files = FileUtils.listFiles(worldDir, TrueFileFilter.INSTANCE, TrueFileFilter.INSTANCE);
         for (File file : files) {
-            uploadFile(bucket, file.getPath());
-            System.out.println(file.getPath());
+            storage.uploadFile(file.getPath());
+            System.out.println(file.getPath()); // TODO: replace with a logger
         }
     }
 
-    private void uploadFile(S3Bucket bucket, String filename) throws NoSuchAlgorithmException, IOException, S3ServiceException {
-        File fileData = new File(filename);
-        S3Object fileObject = new S3Object(fileData);
-        fileObject.setKey(filename);
+    private Map<String, String> getProperties(String filename) throws FileNotFoundException, IOException {
+        Properties props = new Properties();
 
-        fileObject = s3Service.putObject(bucket, fileObject);
-        System.out.println("File uploaded to [" + bucket.getName() + "]: " + fileObject.getName());
-    }
+        InputStream in = new FileInputStream(filename);
+        props.load(in);
 
-    private void deleteBucket() throws ServiceException {
-        for (S3Object obj : s3Service.listObjects(s3BucketName)) {
-            s3Service.deleteObject(s3BucketName, obj.getKey());
+        Map<String, String> data = new HashMap<>(8);
+        for (String key : props.stringPropertyNames()) {
+            data.put(key, props.getProperty(key, ""));
         }
-        s3Service.deleteBucket(s3BucketName);
-    }
-
-    private boolean bucketExists() throws S3ServiceException {
-        S3Bucket[] buckets = s3Service.listAllBuckets();
-        for (S3Bucket bucket : buckets) {
-            if (bucket.getName().equals(s3BucketName)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private String readFromS3Properties(String key) throws FileNotFoundException, IOException {
-        return readFromS3Properties(key, "");
-    }
-
-    private String readFromS3Properties(String key, String defaultValue) throws FileNotFoundException, IOException {
-        Properties s3 = new Properties();
-
-        InputStream in = new FileInputStream("s3storage.properties");
-        s3.load(in);
-
-        return s3.getProperty(key, defaultValue);
+        return data;
     }
 
     private String readFromEnv(String key) {
-        Properties props = System.getProperties();
-        String output = "";
-        if (props.containsKey(key)) {
-            output = props.getProperty(key);
-            if (output == null || output.isEmpty()) {
-                output = "";
-            }
+        String output = System.getenv(key);
+        if (output == null || output.isEmpty()) {
+            output = "";
         }
         return output;
+    }
+
+    private void writeEula() throws IOException {
+        File file = new File("eula.txt");
+        if (!file.exists()) {
+            file.createNewFile();
+            try (PrintWriter pr = new PrintWriter(file)) {
+                pr.print("eula=true");
+                pr.flush();
+            }
+        }
+    }
+
+    private void writeServerProperties() throws IOException {
+        File file = new File("server.properties");
+        if (!file.exists()) {
+            file.createNewFile();
+            try (PrintWriter pr = new PrintWriter(file)) {
+                pr.print("max-tick-time=60000");
+                pr.print("generator-settings=");
+                pr.print("force-gamemode=true");
+                pr.print("allow-nether=true");
+                pr.print("gamemode=0");
+                pr.print("enable-query=false");
+                pr.print("player-idle-timeout=0");
+                pr.print("difficulty=1");
+                pr.print("spawn-monsters=true");
+                pr.print("op-permission-level=4");
+                pr.print("resource-pack-hash=");
+                pr.print("announce-player-achievements=true");
+                pr.print("pvp=true");
+                pr.print("snooper-enabled=false");
+                pr.print("level-type=DEFAULT");
+                pr.print("hardcore=false");
+                pr.print("enable-command-block=true");
+                pr.print("max-players=12");
+                pr.print("network-compression-threshold=256");
+                pr.print("max-world-size=29999984");
+                pr.print("rcon.port=25575");
+                pr.print("server-port=25565");
+                pr.print("server-ip=");
+                pr.print("spawn-npcs=true");
+                pr.print("allow-flight=true");
+                pr.print("level-name=world");
+                pr.print("view-distance=10");
+                pr.print("resource-pack=");
+                pr.print("spawn-animals=true");
+                pr.print("white-list=false");
+                pr.print("rcon.password=c1oudc0w");
+                pr.print("generate-structures=true");
+                pr.print("online-mode=true");
+                pr.print("max-build-height=256");
+                pr.print("level-seed=");
+                pr.print("use-native-transport=true");
+                pr.print("motd=A Minecraft Server on CloudFoundry");
+                pr.print("enable-rcon=true");
+                pr.flush();
+            }
+        }
     }
 
     private void updateServerProperties(Map<String, String> values) throws FileNotFoundException, IOException {
@@ -179,8 +185,8 @@ public class MinecraftApp {
     }
 
     private String getPort() {
-        Properties props = System.getProperties();
-        String port = props.getProperty("PORT");
+        String port = readFromEnv("PORT");
+        System.out.println("ENV PORT = " + port); // TODO: replace with a logger
         if (port == null || port.isEmpty()) {
             port = "25565"; // default port is 25565
         }

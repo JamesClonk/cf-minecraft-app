@@ -1,0 +1,10 @@
+---
+applications:
+- name: cf-minecraft-app
+  memory: 1024M
+  disk: 1024M
+  instances: 1
+  buildpack: https://github.com/cloudfoundry/java-buildpack
+  host: cf-minecraft-app
+  domain: nova.scapp.io
+  path: MinecraftApp.jar

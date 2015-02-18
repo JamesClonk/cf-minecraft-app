@@ -13,7 +13,11 @@ hs_err_pid*
 # folders
 src/nbproject/private
 src/build
+src/store
+src/crash-reports
 src/logs
+src/dist
+logs
 
 # mc
 minecraft*jar
@@ -22,4 +26,3 @@ minecraft*jar
 # aws
 .env
 s3storage.properties
-
